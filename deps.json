@@ -4,7 +4,11 @@
   "date": "2026-11-23",
   "description": "GLM-5.3-Flash MTP draft 微调（V10.2 配方：KL(2.33, top-128) + agree-CE 0.5 + margin 0.3/m0.5 va 锚 + draft-CE 0/0.25 + LR 分组 MTP 2e-5 / LoRA 5e-6 + cosine）。LF 数据管线 + Megatron-Core 0.18.2 训练核 + vLLM serving 接受率验收（北极星 K̄，base=3.521）。",
   "hardware": {
-    "npu_per_node": {"model": "Ascend910", "count": 16, "hbm_gb": 61.28},
+    "npu_per_node": {
+      "model": "Ascend910",
+      "count": 16,
+      "hbm_gb": 61.28
+    },
     "arch": "aarch64",
     "topology": "单机 16 卡（torchrun --nproc_per_node=16, TP16, master_port 29778-29790）",
     "containers": "dspark 系（l00840580-dspark / l00840580-v11 同谱系），训练工作站 .34(A3-syn-24) / .40(A3-syn-25)"
@@ -30,7 +34,11 @@
       "purpose": "serving 验收 + on-policy rollout + ce_gate（北极星 K̄ 计数器 /metrics）"
     },
     "pytest": "8.4.2 / 9.0.2 / 9.2.0 均实测可跑（CPU 单测；.36 用 3.12.13+pytest8.4.2，本仓校验用 3.11.15+pytest9.0.2）",
-    "misc": ["safetensors", "numpy", "yaml"]
+    "misc": [
+      "safetensors",
+      "numpy",
+      "yaml"
+    ]
   },
   "in_repo_vendored": {
     "scripts/v10/v10_data.py": "LF→mcore 数据管线（McoreBatcher/load_lf_data），VERBATIM 自 V8 线 scripts/v8/v8_data.py——V10 自包含内联",
@@ -55,5 +63,32 @@
     "DISABLE_VERSION_CHECK": "1"
   },
   "version_baseline_provenance": "python/CANN/torch/torch_npu/transformers 基线值取自同容器谱系的 warpack/deps.json（V4 实测）+ launch_v102_train_34.sh / launch_v10_train_v102_40.sh（V10.2 实跑 launcher）+ 训练日志 traceback 路径（/usr/local/python3.12.16、/root/mcore0182-src）交叉证实；mcore 0.18.2 / vllm-ascend 0.30 / LF 组合见 docs/V10_DESIGN.md、V10.2_CONSULT.md §一",
-  "test_evidence": "CPU 子集（无 mcore 环境）29 passed / 14 skipped；mcore 子集（build/fill/mtp/tpfill/lora/units/grouped_experts 等）需 PYTHONPATH=/root/mcore0182-src，在训练工作站跑全绿（见源仓 commit 2699d8a/d4cbe99 记录）"
+  "test_evidence": "CPU 子集（无 mcore 环境）29 passed / 14 skipped；mcore 子集（build/fill/mtp/tpfill/lora/units/grouped_experts 等）需 PYTHONPATH=/root/mcore0182-src，在训练工作站跑全绿（见源仓 commit 2699d8a/d4cbe99 记录）",
+  "data_and_eval": {
+    "train_data": {
+      "cmb_eagle_30k": {
+        "rows": 30000,
+        "content": "数学应用题+通用QA sharegpt 对话（中34%/英66%）——分布实测见 docs/V10_TRAIN.md §7",
+        "path": "/mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/data/lf_data/cmb_eagle_30k.jsonl（NFS 符号链接 → mtp/lf_glm53_qlora_mtp/data/lf_data/，dataset_info.json 同目录注册）",
+        "note": "语料本体不入库（.gitignore）；换机时 NFS 路径可达或按此路径重建"
+      }
+    },
+    "eval_prompts": {
+      "382_three_group": {
+        "files": [
+          "prompts_group1_unseen.jsonl(197)",
+          "prompts_group2_cp250.jsonl(98)",
+          "prompts_group3_late.jsonl(87)"
+        ],
+        "md5": [
+          "6c79872eb2e5cc3c79a2bc2c2d92257f",
+          "771741b4d61328d938c321d01334b172",
+          "86f2c0d0d7ebd40dff2e70bdceb8cc9d"
+        ],
+        "path": "/mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/reports/v10_eval382/（源仓权威，本仓不入库——deploy/run_serve_v103.sh 的 V10_BENCH_PROMPTS_DIR 默认指向它）",
+        "seed": "20261121 确定性采样，组间零重叠；判定口径见 docs/V10_TRAIN.md §6d"
+      }
+    },
+    "baseline_anchors": "base K̄=3.521 / V10-CP500 2.487 / V10.1-CP100 2.342|2.426|2.394 / bisect(LoRA-only) 3.20+ / V10.2-CP100 1.962|2.007|(G3) —— 全部同 382 三组 + 同 serving 协议（TP16/K=5/seed 1024/greedy）"
+  }
 }
