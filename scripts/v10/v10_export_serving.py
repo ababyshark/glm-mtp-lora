@@ -186,7 +186,16 @@ VL = 45
 MT = "mtp.layers.0."
 VI = f"{CKPT}layers.{VL}."
 
+_mtp_skipped = []
+
 def mtp_simple(mcore_name, vend_rel, component, mode="replicated"):
+    # V10.3 (2026-11-23): keys frozen by the trainer (router/norms per
+    # _mtp_frozen) are ABSENT from the CP shard (optimizer-managed set only).
+    # Absent = frozen = keep the training-base value — which is exactly what
+    # the symlink farm already preserves. Skip instead of KeyError.
+    if mcore_name not in rank_params[0]:
+        _mtp_skipped.append(component)
+        return
     if mode == "replicated":
         t = get(0, mcore_name).float()
     elif mode == "column":
@@ -302,6 +311,10 @@ for e in range(n_exp):
         print(f"  experts {e}...")
 
 # ---- 3) write: vendor copy (symlink-farm) + patch ----
+if _mtp_skipped:
+    print(f"[export] frozen-in-CP keys kept at training-base value "
+          f"(V10.3 freeze surface, {len(_mtp_skipped)}): "
+          f"{sorted(set(_mtp_skipped))}")
 # container root fs is 100% FULL (trap) — the serve dir MUST live on NFS and
 # UNMODIFIED files are SYMLINKS into the vendor dir (vLLM reads through
 # symlinks); only shards containing modified tensors are real copies.

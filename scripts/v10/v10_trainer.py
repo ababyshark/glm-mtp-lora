@@ -134,17 +134,59 @@ def load_cp(model, optimizer, cp_file, master=None, with_opt=True):
     return blob["step"]
 
 
+def _mtp_frozen(name):
+    """V10.3 freeze surface (user verdict 2026-11-23: narrow-domain 100-step
+    overwrites scrambled the fragile MTP structures first — router routing
+    collapsed, norm drift compounds through the chain). Frozen inside mtp.*:
+      router (mlp.gate)  — GLM53_V10_FREEZE_MTP_ROUTER=1 (default)
+      every RMSNorm      — GLM53_V10_FREEZE_MTP_NORMS=1 (default: enorm/hnorm/
+                           final/input/pre_mlp/q_a_ln/kv_a_ln/indexer.k_norm)
+      eh_proj            — GLM53_V10_FREEZE_EH_PROJ=1 (default OFF: it is the
+                           draft's entry projection and one of the real learners)
+    Trainable in mtp.*: attention linears + expert MLPs (fc1/fc2). Frozen keys
+    are absent from the CP (optimizer-managed set) — the exporter treats
+    missing keys as frozen and keeps the training-base value (V10.3 contract)."""
+    if os.environ.get("GLM53_V10_FREEZE_MTP_ROUTER", "0") == "1" \
+            and ".mlp.router." in name:
+        return True
+    if os.environ.get("GLM53_V10_FREEZE_MTP_NORMS", "0") == "1" \
+            and "norm" in name:
+        return True
+    if os.environ.get("GLM53_V10_FREEZE_EH_PROJ", "0") == "1" \
+            and "eh_proj" in name:
+        return True
+    return False
+
+
+def _kl_reduce(main_det, draft, tk):
+    """KL impl selector (V10.3 2026-11-23): tk>0 → legacy top-k renormalized
+    truncation (V10.2 compatibility, unchanged bytes); tk=0 → FULL-vocab
+    chunked_vocab_kl. The top-128 renormalization leaks probability mass
+    off-distribution (the draft never learns behavior outside the top-128
+    support — serving showed exactly that gap). main is the caller-detached
+    fixed reference; gradient flows into draft only."""
+    if tk > 0:
+        from v10_diag import chunked_topk_kl
+        return chunked_topk_kl(main_det, draft, topk=tk)
+    from v10_diag import chunked_vocab_kl
+    return chunked_vocab_kl(main_det, draft)
+
+
 def build_trainable(model):
-    """Trainable whitelist (user contract 2026-11-20: 主权重+MTP 都微调):
-    LoRA adapters on the BF16 base decoder (v10_lora.apply_lora) + the full
-    MTP subtree. Base weights themselves stay frozen — full-param AdamW on
-    ~300B is physically infeasible (~225G/card); adapters merge into the base
-    at export. Returns (handled lora names, n_frozen)."""
+    """Trainable whitelist (user contract 2026-11-20: 主权重+MTP 都微调;
+    V10.3 2026-11-23: mtp router/norms frozen per _mtp_frozen):
+    LoRA adapters on the BF16 base decoder (v10_lora.apply_lora) + the MTP
+    subtree minus the frozen surface. Base weights themselves stay frozen —
+    full-param AdamW on ~300B is physically infeasible (~225G/card); adapters
+    merge into the base at export. Returns (handled lora names, n_frozen)."""
     from v10_lora import apply_lora
     handled = apply_lora(model.decoder)
     n_frozen = 0
     for n, p in model.named_parameters():
-        if n.startswith("mtp.") or "lora_" in n:
+        if n.startswith("mtp.") and _mtp_frozen(n):
+            p.requires_grad_(False)
+            n_frozen += 1
+        elif n.startswith("mtp.") or "lora_" in n:
             p.requires_grad_(True)
         else:
             p.requires_grad_(False)
@@ -391,10 +433,11 @@ def main():
         # the draft only). Weight = the V5.4 distill weight; 0 = legacy off.
         kl_w = float(os.environ.get("GLM53_MTP_DISTILL_WEIGHT", "0"))
         if kl_w > 0:
-            from v10_diag import chunked_topk_kl
+            # default 128 = V10.2 replay safety (legacy path byte-identical);
+            # the V10.3 launcher pins GLM53_V10_TOPK_KL=0 for full-vocab KL.
             tk = int(os.environ.get("GLM53_V10_TOPK_KL", "128"))
-            kl = chunked_topk_kl(main_logits[:-1].contiguous().detach(),
-                                 draft_logits[:-1].contiguous(), topk=tk)
+            kl = _kl_reduce(main_logits[:-1].contiguous().detach(),
+                            draft_logits[:-1].contiguous(), tk)
             loss = loss + kl_w * kl
             model._last_kl = float(kl.detach())
         # argmax-shaping terms (V8 frozen recipe, §11.4): agree-CE chases the
