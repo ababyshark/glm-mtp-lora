@@ -32,9 +32,6 @@ os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
-V8 = os.path.join(os.path.dirname(HERE), "v8")
-if V8 not in sys.path:
-    sys.path.insert(0, V8)
 
 import torch  # noqa: E402
 
@@ -165,7 +162,7 @@ def main():
     from v10_model import build_v10_model
     from v10_trainer import build_trainable, load_cp
 
-    from v8_data import load_lf_data
+    from v10_data import load_lf_data
     _tok, _tpl, train_ds = load_lf_data("configs/glm53_v10_train.yaml")
     cutoff = 1024
 

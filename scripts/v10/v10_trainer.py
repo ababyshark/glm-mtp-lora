@@ -21,15 +21,13 @@ import time
 import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-V8 = os.path.join(os.path.dirname(HERE), "v8")
-for p in (HERE, V8):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
 
 from v10_config import vendor_config  # noqa: E402
 from v10_fill import fill_model  # noqa: E402
 from v10_model import build_v10_model  # noqa: E402
-from v8_data import McoreBatcher, load_lf_data  # noqa: E402  (iron rules §6 reuse)
+from v10_data import McoreBatcher, load_lf_data  # noqa: E402  (iron rules §6 reuse, V8 verbatim)
 from launch_ce_gate import npu_shim  # noqa: E402
 
 

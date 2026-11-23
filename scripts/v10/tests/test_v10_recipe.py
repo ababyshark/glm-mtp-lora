@@ -9,7 +9,7 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 V10 = os.path.dirname(HERE)
-for p in (V10, HERE, os.path.join(os.path.dirname(V10), "v8")):
+for p in (V10, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 

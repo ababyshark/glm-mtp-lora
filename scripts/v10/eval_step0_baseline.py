@@ -91,7 +91,7 @@ def main():
     from v10_fill import fill_model
     from v10_model import build_v10_model
     from v10_trainer import build_trainable, fixed_diag_kernel, load_cp
-    from v8_data import load_lf_data
+    from v10_data import load_lf_data
 
     import yaml as _yaml
     seq_len = args.seq_len or int(_yaml.safe_load(open(args.yaml)).get("cutoff_len", 2048))

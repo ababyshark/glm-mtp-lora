@@ -1,18 +1,9 @@
 #!/usr/bin/env python
-"""V8 Phase 2: LF data pipeline → mcore batches (iron rules rule 0: LF owns the
-data, megatron owns the training core; the glue is THIS module only).
+"""LF data pipeline → mcore batches (iron rules rule 0: LF owns the data,
+megatron owns the training core; the glue is THIS module only).
 
-Design (docs/V8_IRON_RULES.md §6 Phase 2):
-- Integration point = LlamaFactory's own data machinery: load_tokenizer +
-  get_template_and_fix_tokenizer + get_dataset — the SAME dataset/template the
-  V7.0 judgment training uses (cmb_eagle_30k + glm5_next_text, cutoff 2048).
-- The mcore adapter (McaTrainer) path was REJECTED (see iron rules §6): its
-  patcher converts HF weights (inapplicable to W4A8 ModelSlim packed), needs a
-  glm_moe_dsa registry entry, and is unaware of the post-build surgery
-  (slim/norm/MTP swaps). One thin glue surface here instead.
-- Batch convention: mcore is seq-first [S, B]. The LF sft labels carry -100
-  masking; Phase 2 trains the NATIVE full-LM MTP loss (labels=input_ids) —
-  the V5.4a masking/recipe semantics migrate in Phase 4 (iron rules plan).
+VERBATIM from the V8 line's scripts/v8/v8_data.py (V10 self-containment: the
+V8 dir is not vendored here) — imports/uses unchanged, provenance only.
 """
 import json
 import os

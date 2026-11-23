@@ -33,8 +33,8 @@
     "misc": ["safetensors", "numpy", "yaml"]
   },
   "in_repo_vendored": {
-    "scripts/v8/v8_data.py": "V10.2 运行时依赖——LF→mcore 数据管线（McoreBatcher/load_lf_data），v10_trainer/eval_groups/xval_kernel/eval_step0_baseline 引用",
-    "scripts/v8/v8_recipe.py": "V10.2 运行时依赖——chunked_ce_margin（V5.4a 共享资产，v10_recipe.py verbatim 复用）",
+    "scripts/v10/v10_data.py": "LF→mcore 数据管线（McoreBatcher/load_lf_data），VERBATIM 自 V8 线 scripts/v8/v8_data.py——V10 自包含内联",
+    "scripts/v10/v10_ce_margin.py": "chunked_ce_margin（V5.4a 共享资产）VERBATIM 自 V8 线 scripts/v8/v8_recipe.py——仅携带此依赖面，W4A8 serving_chain geometry 未合并（do-not-merge 规则）",
     "scripts/v10/reference/mcore020/": "mcore 0.20 的 DSA/absorbed_mla/dsa_masking 纯 torch 参考——V10 DSA 移植底本（0.18.2 无此模块）"
   },
   "key_env": {

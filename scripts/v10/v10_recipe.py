@@ -1,6 +1,7 @@
 """V10 Phase 4: the V5.4a judgment recipe on the Flash (Glm5Next) MTP.
 
-Geometry DIFFERS from the W4A8 port (v8_recipe.py) — do not merge them:
+Geometry DIFFERS from the W4A8 port (the V8 line's v8_recipe.py, source repo
+only — NOT merged here):
 - Flash MTP inner layer is a STANDARD SEQUENCE self-attention layer (DSv3
   structure): fused = eh_proj(cat) -> causal self-attn over S -> mlp. There is
   NO depth-axis attention, NO hd_stack chaining (that was the W4A8 vendor's
@@ -45,7 +46,7 @@ def _vocab_gather(sharded):
     BUG FIX (2026-11-20, error-ledger #18): the previous dist.all_gather is
     NOT differentiable — at TP16 it SEVERED the gradient of the recipe's CE
     term on the grad-carrying draft rows (V8's TP16 training had the same
-    silent severing in v8_recipe). Uses mcore's autograd-native gather; under
+    silent severing in its W4A8 port). Uses mcore's autograd-native gather; under
     no_grad it degrades to a plain gather (the verifier call path)."""
     tp, _ = _tp()
     if tp == 1:
@@ -55,13 +56,10 @@ def _vocab_gather(sharded):
         sharded.contiguous())
 
 
-# chunked_ce_margin is the shared V5.4a asset — reuse V8's verbatim (geometry-
-# independent: head + normed rows + targets).
-import sys as _sys  # noqa: E402
-_V8 = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "v8")
-if _V8 not in _sys.path:
-    _sys.path.insert(0, _V8)
-from v8_recipe import chunked_ce_margin  # noqa: E402,F401
+# chunked_ce_margin is the shared V5.4a asset — the V8-line verbatim copy
+# (geometry-independent: head + normed rows + targets), vendored as
+# v10_ce_margin.py for self-containment.
+from v10_ce_margin import chunked_ce_margin  # noqa: E402,F401
 
 
 def draft_stream(model, input_ids, base_hidden):

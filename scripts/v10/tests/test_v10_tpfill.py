@@ -16,7 +16,7 @@ import torch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 V10 = os.path.dirname(HERE)
-for p in (V10, HERE, os.path.join(os.path.dirname(V10), "v8")):
+for p in (V10, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
@@ -217,7 +217,7 @@ def test_vocab_parallel_ce_gather_math():
 def test_chunked_ce_margin_return_shapes_and_ignore_index():
     """want_margin=False -> scalar; True -> (ce, margin). IGNORE_INDEX rows
     contribute to NEITHER ce nor margin (sum/count semantics)."""
-    from v8_recipe import chunked_ce_margin
+    from v10_ce_margin import chunked_ce_margin
 
     torch.manual_seed(10)
     R, V = 10, 32
