@@ -1,0 +1,57 @@
+--- a/megatron/core/transformer/dot_product_attention.py
++++ b/megatron/core/transformer/dot_product_attention.py
+@@ -49,6 +49,9 @@
+         softmax_scale: Optional[float] = None,
+         cp_comm_type: Optional[str] = None,
+         pg_collection: Optional[ProcessGroupCollection] = None,
++        k_channels: Optional[int] = None,  # V7: MLA passes these; local DPA ignores
++        v_channels: Optional[int] = None,  # V7: MLA passes these; local DPA ignores
++        **kwargs,                           # absorb any other MLA extras
+     ):
+         super().__init__(config=config)
+ 
+--- a/megatron/core/pipeline_parallel/schedules.py
++++ b/megatron/core/pipeline_parallel/schedules.py
+@@ -666,7 +666,7 @@
+ 
+     forward_data_store = []
+     input_tensor, output_tensor_grad = None, None
+-    total_num_tokens = torch.zeros([], dtype=torch.int, device="cuda")
++    total_num_tokens = torch.zeros([], dtype=torch.int, device=torch.npu.current_device())
+ 
+     if config.overlap_moe_expert_parallel_comm and not forward_only:
+         forward_data_store, total_num_tokens = combined_1f1b_schedule_for_no_pipelining(
+@@ -1053,7 +1053,7 @@
+ 
+     input_tensors = [[] for _ in range(len(model))]
+     output_tensors = [[] for _ in range(len(model))]
+-    total_num_tokens = torch.zeros([], dtype=torch.int, device="cuda")
++    total_num_tokens = torch.zeros([], dtype=torch.int, device=torch.npu.current_device())
+ 
+     forward_data_store = []
+     output_tensor_grads = None
+@@ -2239,7 +2239,7 @@
+     # Input, output tensors only need to be saved when doing backward passes
+     input_tensors = None
+     output_tensors = None
+-    total_num_tokens = torch.zeros([], dtype=torch.int, device="cuda")
++    total_num_tokens = torch.zeros([], dtype=torch.int, device=torch.npu.current_device())
+ 
+     if not forward_only:
+         input_tensors = []
+--- a/megatron/core/transformer/moe/moe_layer.py
++++ b/megatron/core/transformer/moe/moe_layer.py
+@@ -618,10 +618,9 @@
+             A tuple containing the output tensor and the MLP bias, if any.
+         """
+         if self.training and self.attn_tp_group.size() > 1 and not self.config.sequence_parallel:
+-            raise ValueError(
+-                "During training, performance may degrade if MoE and tensor parallelism"
+-                "are enabled without also enabling sequence parallelism."
+-            )
++            pass  # V8: MoE+TP without SP is the intended layout (DP=1/TP16,
++                  # custom quant-resident linears; the branch-1 equivalent runs
++                  # the same layout without SP — mcore performance opinion N/A)
+         # Select the active token dispatcher based on whether the inference engine
+         # is currently using the model. Only applies when the inference dispatcher
+         # was set up (config.transformer_impl == "inference_optimized").

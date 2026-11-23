@@ -1,0 +1,126 @@
+diff --git a/src/llamafactory/model/loader.py b/src/llamafactory/model/loader.py
+index b162c882..024aa14b 100644
+--- a/src/llamafactory/model/loader.py
++++ b/src/llamafactory/model/loader.py
+@@ -25,7 +25,10 @@ from transformers import (
+     AutoProcessor,
+     AutoTokenizer,
+ )
+-from trl import AutoModelForCausalLMWithValueHead
++try:  # trl>=1.0 removed AutoModelForCausalLMWithValueHead (unused for SFT)
++    from trl import AutoModelForCausalLMWithValueHead
++except ImportError:
++    AutoModelForCausalLMWithValueHead = None
+ 
+ from ..extras import logging
+ from ..extras.misc import count_parameters, skip_check_imports, try_download_model_from_other_hub
+@@ -187,6 +190,7 @@ def load_model(
+     model = init_adapter(config, model, model_args, finetuning_args, is_trainable)
+ 
+     if add_valuehead:
++        assert AutoModelForCausalLMWithValueHead is not None, "trl>=1.0 dropped ValueHead support"
+         model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
+         patch_valuehead_model(model)
+ 
+diff --git a/src/llamafactory/train/ppo/trainer.py b/src/llamafactory/train/ppo/trainer.py
+index eaa74bb3..d2e7ca5f 100644
+--- a/src/llamafactory/train/ppo/trainer.py
++++ b/src/llamafactory/train/ppo/trainer.py
+@@ -32,7 +32,13 @@ from transformers.trainer_callback import CallbackHandler
+ from transformers.trainer_pt_utils import remove_dummy_checkpoint
+ from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+ from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
+-from trl import PPOConfig, PPOTrainer
++try:  # trl>=1.0 removed the PPO API (unused for SFT/MTP paths)
++    from trl import PPOConfig, PPOTrainer
++except ImportError:
++    PPOConfig = None
++    PPOTrainer = type("_PPONoOp", (object,), {})  # dummy base: the module-level
++    # class CustomPPOTrainer(PPOTrainer, Trainer) below only needs a valid base
++    # at import time; it is never instantiated on SFT/MTP paths
+ from trl import __version__ as trl_version
+ from trl.models.utils import unwrap_model_for_generation
+ from typing_extensions import override
+diff --git a/src/llamafactory/train/sft/trainer.py b/src/llamafactory/train/sft/trainer.py
+index ce4ed9b1..689117fe 100644
+--- a/src/llamafactory/train/sft/trainer.py
++++ b/src/llamafactory/train/sft/trainer.py
+@@ -147,7 +147,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+                 if idx == -1:
+                     continue
+                 k = n[idx:].replace(".modules_to_save.default.", ".")
+-                sd[k] = p.detach().cpu()
++                t = p.detach()
++                if hasattr(t, "to_local"):  # DTensor under FSDP2
++                    t = t.to_local()
++                sd[k] = t.cpu()
+                 names.append(k)
+             path = _os.path.join(output_dir, "mtp_ft_weights.safetensors")
+             _save_file(sd, path, metadata={"format": "pt"})
+@@ -159,20 +162,60 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
+ 
+     @override
+     def training_step(self, model, inputs, num_items_in_batch=None):
+-        # opt-in path for frozen-quantized-base models: the whole per-device batch
+-        # goes through one layer-major forward (quantized weights dequantized once
+-        # per layer) with per-sample MTP backward inside the model.
++        # branch 1: W4A8 serial path - the whole per-device batch goes through
++        # one layer-major forward with the backward INSIDE the model.
+         if getattr(model, "supports_multi_microbatch", False):
+             model.train()
+             inputs = self._prepare_inputs(inputs)
+-            loss = model.multi_microbatch_loss(
+-                inputs["input_ids"], inputs.get("attention_mask"), inputs.get("labels")
+-            )
++            # autocast so fp32 master weights compute in bf16 (AMP; grads fp32)
++            with torch.autocast("npu", dtype=torch.bfloat16):
++                loss = model.multi_microbatch_loss(
++                    inputs["input_ids"], inputs.get("attention_mask"), inputs.get("labels")
++                )
+             return loss.detach()
++        # branch 2: BF16 FSDP2 path (LF-native flow) - one-time lazy fill of
++        # what from_pretrained cannot map (stacked experts / ties / rot), then
++        # the standard compute_loss + accelerator.backward. ALL params (incl.
++        # the MTP block, via base_model_fsdp_plan keep_full_weight) are FSDP2
++        # managed - grads reduce-scatter through FSDP2's param hooks.
++        if getattr(self.model, "mtp_fp32_masters", False):
++            import os as _os
++            _vd = _os.environ.get("GLM53_VENDOR_DIR")
++            if _vd:
++                self.model.post_fsdp_fill(_vd)
+         return super().training_step(model, inputs, num_items_in_batch)
+ 
+     @override
+     def create_optimizer(self, *args, **kwargs) -> "torch.optim.Optimizer":
++        if self.optimizer is None and (
++            getattr(self.model, "supports_multi_microbatch", False)
++            or getattr(self.model, "mtp_fp32_masters", False)
++        ):
++            import os as _os
++            if getattr(self.model, "mtp_fp32_masters", False):
++                _vd = _os.environ.get("GLM53_VENDOR_DIR")
++                if _vd:
++                    self.model.post_fsdp_fill(_vd)  # fill BEFORE the fp32 cast
++            # DTensor param attribute access goes through torch_npu's torch-function
++            # dispatch (~5-10ms/param x 177k params); grouping only needs metadata,
++            # so run it with torch-function disabled (FSDP2 path)
++            with torch._C.DisableTorchFunction():
++                float_params, lora_params = [], []
++                for n, p in self.model.named_parameters():
++                    if not p.requires_grad:
++                        continue
++                    # fp32 master weights (bf16-ULP fix, PLAN §14): updates at
++                    # lr~1e-5 are otherwise rounded away by bf16 params
++                    p.data = p.data.float()
++                    (lora_params if "lora_" in n else float_params).append(p)
++                self.optimizer = torch.optim.AdamW(
++                    [
++                        {"params": float_params, "lr": self.model.mtp_lr_float, "base": self.model.mtp_lr_float},
++                        {"params": lora_params, "lr": self.model.mtp_lr_lora, "base": self.model.mtp_lr_lora},
++                    ],
++                    betas=(0.9, 0.95), weight_decay=0.0,
++                )
++            return self.optimizer
+         if self.optimizer is None:
+             self.optimizer = create_custom_optimizer(self.model, self.args, self.finetuning_args)
+         return super().create_optimizer(*args, **kwargs)
