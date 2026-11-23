@@ -1,0 +1,13 @@
+### V10 T4: MTP judgment training — LF data keys only (v8_data.load_lf_data
+### reads dataset/dataset_dir/template/cutoff_len + model_name_or_path for the
+### tokenizer). Base = GLM-5.3-Flash-BF16 (plain copy fill, zero dequant).
+### cutoff_len 1024: memory-conservative first run (V6.2 lesson: S=2048
+### backward is tight on 61.28G cards); trainer --seq-len overrides.
+model_name_or_path: /mnt/weight2/GLM-5.3-Flash-BF16
+trust_remote_code: true
+
+dataset: cmb_eagle_30k
+dataset_dir: /mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/data/lf_data
+template: glm5_next_text
+cutoff_len: 1024
+preprocessing_num_workers: 8

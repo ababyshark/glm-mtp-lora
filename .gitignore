@@ -11,3 +11,5 @@ h0-test/h0_cmb32/
 h0-test/tok_*/
 reports/opencode-session-*.json
 *.prof
+
+logs/
