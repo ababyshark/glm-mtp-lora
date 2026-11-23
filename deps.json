@@ -1,0 +1,58 @@
+{
+  "name": "glm-mtp-lora (V10.2)",
+  "version": "10.2.0",
+  "date": "2026-11-23",
+  "description": "GLM-5.3-Flash MTP draft 微调（V10.2 配方：KL(2.33, top-128) + agree-CE 0.5 + margin 0.3/m0.5 va 锚 + draft-CE 0/0.25 + LR 分组 MTP 2e-5 / LoRA 5e-6 + cosine）。LF 数据管线 + Megatron-Core 0.18.2 训练核 + vLLM serving 接受率验收（北极星 K̄，base=3.521）。",
+  "hardware": {
+    "npu_per_node": {"model": "Ascend910", "count": 16, "hbm_gb": 61.28},
+    "arch": "aarch64",
+    "topology": "单机 16 卡（torchrun --nproc_per_node=16, TP16, master_port 29778-29790）",
+    "containers": "dspark 系（l00840580-dspark / l00840580-v11 同谱系），训练工作站 .34(A3-syn-24) / .40(A3-syn-25)"
+  },
+  "software": {
+    "python": "3.12（.35/.36 = /usr/local/python3.12.13；.34/.40 容器实测 3.12.16；训练 venv = /root/venv_v8/bin/python）",
+    "cann": "9.1.0（toolkit + nnal/atb runtime，via /mnt/share_space/l00840580/env.sh）",
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post4",
+    "megatron_core": {
+      "version": "0.18.2",
+      "install": "源码树注入，非 pip：export PYTHONPATH=/root/mcore0182-src（launch_v102_train_34.sh 同款）",
+      "note": "v10_mtp.py 记录的 0.18.2 commit 571370c82（MTP padding_mask 签名 bug 出自此版）；TransformerEngine/Apex 未装（torch optimizers 回退，训练日志证实）"
+    },
+    "llamafactory": {
+      "install": "git 树注入，非 pip：LF_SRC（默认 /mnt/share_space/l00840580/LlamaFactory/src，v8_data.py 运行时注入 sys.path）",
+      "baseline": "upstream @ 4759a8de（V4 warpack 基线沿用；仅用 hparams parser + tokenizer/data 管线）",
+      "usage": "DISABLE_VERSION_CHECK=1 必须（misc.py 钉 transformers<=5.8）"
+    },
+    "transformers": "5.14.1（与 LF git 树配套的组合；原生 GlmMoeDsa + DSA indexer）",
+    "serving": {
+      "vllm_ascend": "0.30（BF16 无量化；vllm.platform_plugins 注册 vllm_ascend:register，训练机日志证实）",
+      "purpose": "serving 验收 + on-policy rollout + ce_gate（北极星 K̄ 计数器 /metrics）"
+    },
+    "pytest": "8.4.2 / 9.0.2 / 9.2.0 均实测可跑（CPU 单测；.36 用 3.12.13+pytest8.4.2，本仓校验用 3.11.15+pytest9.0.2）",
+    "misc": ["safetensors", "numpy", "yaml"]
+  },
+  "in_repo_vendored": {
+    "scripts/v8/v8_data.py": "V10.2 运行时依赖——LF→mcore 数据管线（McoreBatcher/load_lf_data），v10_trainer/eval_groups/xval_kernel/eval_step0_baseline 引用",
+    "scripts/v8/v8_recipe.py": "V10.2 运行时依赖——chunked_ce_margin（V5.4a 共享资产，v10_recipe.py verbatim 复用）",
+    "scripts/v10/reference/mcore020/": "mcore 0.20 的 DSA/absorbed_mla/dsa_masking 纯 torch 参考——V10 DSA 移植底本（0.18.2 无此模块）"
+  },
+  "key_env": {
+    "PYTHONPATH": "/root/mcore0182-src（mcore 训练/单测必须）",
+    "LF_SRC": "LlamaFactory src 路径（默认 /mnt/share_space/l00840580/LlamaFactory/src）",
+    "V10_VENDOR_DIR": "vendor BF16 权重目录（.34=/root/serve_v101_cp100；.40=mtp_git/GLM-5.3-Flash-BF16）",
+    "HF_HOME": "/root/hf_cache_v102 或 mtp_git/.hf_cache_v10（tokenizer/datasets 缓存）",
+    "GLM53_MTP_DISTILL_WEIGHT": "KL 权重 2.33（forward KL(main‖draft)，verifier detach）",
+    "GLM53_V10_AGREE_W / MARGIN_W / MARGIN_M": "0.5 / 0.3 / 0.5（margin 锚 va 化）",
+    "GLM53_V10_DRAFT_W": "draft-CE 权重：.34 臂=0.25（anti-alignment 单变量 A/B），.40 臂=0.0（专家审计后联训裁决）",
+    "GLM53_V10_TOPK_KL": "128（top-k 截断 KL）",
+    "GLM53_V10_MTP_LR": "MTP 组 LR：.34=2e-5，.40=1e-5（LoRA 组固定 5e-6，warmup base_lr 化）",
+    "GLM53_V10_COSINE / MIN_LR": "1 / 1e-6",
+    "GLM53_V10_CLIP / WARMUP / RECOMPUTE": "5.0 / 20 / full",
+    "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+    "TORCHDYNAMO_DISABLE": "1",
+    "DISABLE_VERSION_CHECK": "1"
+  },
+  "version_baseline_provenance": "python/CANN/torch/torch_npu/transformers 基线值取自同容器谱系的 warpack/deps.json（V4 实测）+ launch_v102_train_34.sh / launch_v10_train_v102_40.sh（V10.2 实跑 launcher）+ 训练日志 traceback 路径（/usr/local/python3.12.16、/root/mcore0182-src）交叉证实；mcore 0.18.2 / vllm-ascend 0.30 / LF 组合见 docs/V10_DESIGN.md、V10.2_CONSULT.md §一",
+  "test_evidence": "CPU 子集（无 mcore 环境）29 passed / 14 skipped；mcore 子集（build/fill/mtp/tpfill/lora/units/grouped_experts 等）需 PYTHONPATH=/root/mcore0182-src，在训练工作站跑全绿（见源仓 commit 2699d8a/d4cbe99 记录）"
+}

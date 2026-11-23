@@ -1,0 +1,13 @@
+# weights / checkpoints / big binaries - live on NFS, not in git
+*.safetensors
+saves/
+*.tgz
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+data/lf_data/tok_*/
+h0-test/h0_cmb32/
+h0-test/tok_*/
+reports/opencode-session-*.json
+*.prof
