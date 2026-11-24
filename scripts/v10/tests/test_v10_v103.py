@@ -20,7 +20,7 @@ for p in (V10, HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from v10_trainer import _mtp_frozen, _kl_reduce  # noqa: E402
+from v10_trainer import _mtp_frozen, _kl_reduce, _mtp_grad_bucket  # noqa: E402
 
 MT = "mtp.layers.0."
 
@@ -117,3 +117,64 @@ def test_kl_reduce_topk_legacy_path():
     draft = torch.randn(8, 1, 32)
     assert torch.allclose(_kl_reduce(main.detach(), draft, tk=8),
                           chunked_topk_kl(main.detach(), draft, topk=8))
+
+
+def test_mtp_grad_bucket_semantic_split():
+    """R8 audit buckets must be SEMANTIC — one aggregate mtp_model_layer
+    bucket would hide a recompute-dropped region (experts) behind surviving
+    attention grads. Real mcore key names from the export mapping."""
+    B = lambda *tail: ".".join(("mtp.layers.0.mtp_model_layer",) + tail)  # noqa: E731
+    cases = {
+        B("self_attention.q_a_proj.weight"):
+            B("self_attention"),
+        B("self_attention.o_proj.weight"):
+            B("self_attention"),
+        B("self_attention.q_a_layernorm.weight"):
+            B("self_attention"),
+        B("self_attention.indexer.wk.weight"):
+            B("self_attention.indexer"),
+        B("self_attention.indexer.k_norm.norm.weight"):
+            B("self_attention.indexer"),
+        B("mlp.router.weight"):
+            B("mlp.router"),
+        B("mlp.shared_experts.linear_fc1.weight"):
+            B("mlp.shared_experts"),
+        B("mlp.experts.local_experts.0.linear_fc1.weight"):
+            B("mlp.experts"),
+        B("mlp.experts.local_experts.287.linear_fc2.weight"):
+            B("mlp.experts"),
+        "mtp.layers.0.eh_proj.weight": "mtp.layers.0.eh_proj",
+        "mtp.layers.0.enorm.weight": "mtp.layers.0.enorm",
+        "mtp.layers.0.hnorm.weight": "mtp.layers.0.hnorm",
+        "mtp.layers.0.final_layernorm.weight": "mtp.layers.0.final_layernorm",
+    }
+    for name, bucket in cases.items():
+        assert _mtp_grad_bucket(name) == bucket, name
+    # the R8 masking scenario: attention vs routed experts MUST be separate
+    buckets = {_mtp_grad_bucket(n) for n in
+               (B("self_attention.q_b_proj.weight"),
+                B("mlp.experts.local_experts.0.linear_fc2.weight"))}
+    assert len(buckets) == 2
+
+
+def test_depth_accept_guards_fail_loud():
+    """Config drift (B>1 / mtp_num_layers≠1) must AssertionError, never
+    silently print wrong observability proxies."""
+    from types import SimpleNamespace
+    from v10_trainer import _depth_accept
+    ids_b1 = torch.zeros(1, 6, dtype=torch.long)
+    dec = torch.zeros(6, 1, 4)
+    # B>1 rejected at entry (model never touched)
+    try:
+        _depth_accept(None, torch.zeros(2, 6, dtype=torch.long), dec)
+        raise SystemExit("B>1 must AssertionError")
+    except AssertionError:
+        pass
+    # wrong mtp row count (2*S=12 expected) rejected before chunking
+    stub = SimpleNamespace(mtp=lambda **kw: torch.zeros(10, 1, 4),
+                           embedding=None)
+    try:
+        _depth_accept(stub, ids_b1, dec)
+        raise SystemExit("wrong mtp_out rows must AssertionError")
+    except AssertionError:
+        pass

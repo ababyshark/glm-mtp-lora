@@ -48,6 +48,7 @@ python3 -m pytest scripts/v10/tests -q
 bash deploy/launch_v102_train_34.sh   # V10.2 配方（.34，1000 步，CP@100）
 bash deploy/launch_v102_train_40.sh   # V10.2 配方（.40，MTP LR 1e-5 / draft-CE 0 臂）
 bash deploy/launch_v103_train_34.sh   # V10.3 单变量臂（100 步：冻结面+全词表 KL）
+bash deploy/launch_v103_train_40.sh   # V10.3 .40 臂（从零：全新 BF16 base，须先 cp -a 暂存到 /tmp/v103_base_bf16）
 ```
 
 - launcher 自推导仓库根（`GIT_TREE`），venv/PYTHONPATH/vendor 路径可用 env 覆盖

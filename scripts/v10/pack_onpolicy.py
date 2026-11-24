@@ -46,12 +46,21 @@ def main():
                 n += 1
 
     os.makedirs(args.out_dir, exist_ok=True)
+    all_rows = []
     for dom, rows in per_dom.items():
         path = os.path.join(args.out_dir, f"flash_onpolicy_{dom}.jsonl")
         with open(path, "w") as f:
             for r in rows:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print(f"{dom}: {len(rows)} -> {path}")
+        all_rows.extend(rows)
+    # merged dataset for B1 training (single LF dataset; per-domain kept for
+    # per-domain acceptance reporting)
+    merged = os.path.join(args.out_dir, "flash_onpolicy_all.jsonl")
+    with open(merged, "w") as f:
+        for r in all_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    print(f"all: {len(all_rows)} -> {merged}")
     print(f"total {n}")
     if args.also_lf_data:
         lf = "/mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/data/lf_data"

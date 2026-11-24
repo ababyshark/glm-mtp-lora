@@ -137,12 +137,15 @@ def load_cp(model, optimizer, cp_file, master=None, with_opt=True):
 def _mtp_frozen(name):
     """V10.3 freeze surface (user verdict 2026-11-23: narrow-domain 100-step
     overwrites scrambled the fragile MTP structures first — router routing
-    collapsed, norm drift compounds through the chain). Frozen inside mtp.*:
-      router (mlp.gate)  — GLM53_V10_FREEZE_MTP_ROUTER=1 (default)
-      every RMSNorm      — GLM53_V10_FREEZE_MTP_NORMS=1 (default: enorm/hnorm/
-                           final/input/pre_mlp/q_a_ln/kv_a_ln/indexer.k_norm)
-      eh_proj            — GLM53_V10_FREEZE_EH_PROJ=1 (default OFF: it is the
-                           draft's entry projection and one of the real learners)
+    collapsed, norm drift compounds through the chain). All knobs default to
+    "0" (nothing frozen → V10.2 replay stays byte-identical, enforced by
+    test_replay_safety_defaults_off); the V10.3 launcher pins them ON
+    explicitly. Frozen inside mtp.*:
+      router (mlp.router) — GLM53_V10_FREEZE_MTP_ROUTER=1
+      every RMSNorm       — GLM53_V10_FREEZE_MTP_NORMS=1 (enorm/hnorm/final/
+                            input/pre_mlp/q_a_ln/kv_a_ln/indexer.k_norm)
+      eh_proj             — GLM53_V10_FREEZE_EH_PROJ=1 (default OFF: it is the
+                            draft's entry projection and one of the real learners)
     Trainable in mtp.*: attention linears + expert MLPs (fc1/fc2). Frozen keys
     are absent from the CP (optimizer-managed set) — the exporter treats
     missing keys as frozen and keeps the training-base value (V10.3 contract)."""
@@ -158,6 +161,25 @@ def _mtp_frozen(name):
     return False
 
 
+def _mtp_grad_bucket(name):
+    """R8 audit bucket: SEMANTIC subtree granularity. A single aggregate
+    bucket hides a recompute-dropped region behind surviving grads (e.g.
+    expert grads silently lost while attention keeps the aggregate >0 —
+    the exact R8 failure mode). Splits: self_attention vs .indexer,
+    mlp.router vs .shared_experts vs .experts (all 288 routed experts in
+    one bucket). Frozen params never reach the audit (requires_grad=False
+    → grad None → skipped by the caller), so no bucket is ever frozen-only."""
+    parts = name.split(".")
+    if len(parts) > 4 and parts[3] == "mtp_model_layer":
+        if len(parts) > 5 and parts[5] in ("indexer", "router",
+                                           "shared_experts", "experts"):
+            return ".".join(parts[:6])
+        return ".".join(parts[:5])
+    if len(parts) > 3:
+        return ".".join(parts[:4])
+    return name.rsplit(".", 1)[0]
+
+
 def _kl_reduce(main_det, draft, tk):
     """KL impl selector (V10.3 2026-11-23): tk>0 → legacy top-k renormalized
     truncation (V10.2 compatibility, unchanged bytes); tk=0 → FULL-vocab
@@ -170,6 +192,50 @@ def _kl_reduce(main_det, draft, tk):
         return chunked_topk_kl(main_det, draft, topk=tk)
     from v10_diag import chunked_vocab_kl
     return chunked_vocab_kl(main_det, draft)
+
+
+def _depth_accept(model, ids_b, dec, depths=5, chunk=256):
+    """Per-step D1..D5 chained accept proxies on the TRAIN batch (V10.3
+    observability, user request 2026-11-23). d15 convention (V10_TRAIN §6b):
+    accept_k = P(argmax(draft_k) == ids[t+k]) — vs GOLD corpus; the vs-main
+    D1 number is the existing `agree`. Caller owns the roll (no-roll patch:
+    e(t+k-1) = embedding(roll(ids, -(k-1)))). dec = the main hidden h^(0)
+    already computed by native_loss (no second decoder pass); adds 4 chained
+    MTP forwards ≈ +3s/step (~4%). no_grad throughout — observability only.
+    Returns [a1..a5] floats (B=1 batch convention, same as eval_d15_40)."""
+    from v10_diag import gather_full_logits
+    # V10.3 hardening: silent-wrong-observability guards — a config change
+    # (B>1 or mtp_num_layers≠1) must FAIL LOUD, not print garbage proxies.
+    assert ids_b.shape[0] == 1, \
+        f"_depth_accept assumes B=1, got B={ids_b.shape[0]}"
+    out = []
+    with torch.no_grad():
+        S = ids_b.shape[1]
+        h_prev = dec
+        for k in range(1, depths + 1):
+            ids_k = torch.roll(ids_b, shifts=-(k - 1), dims=-1)
+            mtp_out = model.mtp(input_ids=ids_k,
+                                position_ids=torch.zeros_like(ids_b),
+                                hidden_states=h_prev, attention_mask=None,
+                                inference_params=None, embedding=model.embedding)
+            assert mtp_out.shape[0] == 2 * S, \
+                (f"_depth_accept assumes mtp_num_layers=1 "
+                 f"({2 * S} rows for S={S}), got {mtp_out.shape[0]}")
+            d_k = torch.chunk(mtp_out, 2, dim=0)[-1]
+            logits_k, _ = model.output_layer(d_k)
+            logits_k = logits_k[0] if isinstance(logits_k, tuple) else logits_k
+            if logits_k.dim() == 3:
+                logits_k = logits_k[:, 0]                   # B=1
+            n_pos = S - k
+            tgt = ids_b[0, k:k + n_pos]
+            acc_v = 0
+            for s0 in range(0, n_pos, chunk):
+                end = min(s0 + chunk, n_pos)
+                full = gather_full_logits(logits_k[s0:end], dim=-1)
+                acc_v += (full.argmax(-1) == tgt[s0:end]).sum()
+            out.append(float(acc_v) / max(n_pos, 1))
+            h_prev = d_k
+    return out
 
 
 def build_trainable(model):
@@ -462,6 +528,18 @@ def main():
         model._last_main_ce = float(main_ce.detach().mean())
         model._last_draft_ce = float(draft_ce.detach().mean())
         model._last_argmax_agree = agree
+        # V10.3 per-step D1-D5 accept proxies (train batch, vs gold ids[t+k],
+        # d15 §6b convention — the vs-main D1 number is `agree` above).
+        # NON-FATAL: observability must never kill training (ledger discipline).
+        if os.environ.get("GLM53_V10_DEPTH_DIAG", "1") == "1":
+            try:
+                model._last_depth_accept = _depth_accept(model, ids_b, dec)
+            except Exception as _e:  # noqa: BLE001
+                model._last_depth_accept = None
+                if not getattr(model, "_depth_diag_warned", False):
+                    model._depth_diag_warned = True
+                    print(f"[v10-trainer] depth-diag disabled after error: {_e}",
+                          flush=True)
         return loss
 
     def forward_step(data_iterator, model):
@@ -554,6 +632,7 @@ def main():
             nonfinite = 0
             g_lora_sq = g_mtp_sq = 0.0
             g_lora_n = g_mtp_n = 0
+            g_sub_sq = {}   # R8 deep audit: grad sq-sum per MTP submodule bucket
             for n, p in params_named:
                 g = p.grad
                 if g is None:
@@ -570,6 +649,8 @@ def main():
                 elif n.startswith("mtp."):
                     g_mtp_sq += sq
                     g_mtp_n += 1
+                    bucket = _mtp_grad_bucket(n)
+                    g_sub_sq[bucket] = g_sub_sq.get(bucket, 0.0) + sq
                 master[n].grad = gf
                 p.grad = None      # BUG FIX: autograd ACCUMULATES p.grad across
                                    # steps — without this the optimizer trains
@@ -582,6 +663,13 @@ def main():
             print(f"[v10-trainer {_stamp()}] GRAD AUDIT step1: lora-grads={g_lora_n} "
                   f"mtp-grads={g_mtp_n} frozen-with-grad={len(frozen_with_grad)} "
                   f"(must be 0) — this run IS LoRA(base)+MTP", flush=True)
+            if g_mtp_n:
+                print(f"[v10-trainer {_stamp()}] R8 SUBMODULE AUDIT (grad-norm per MTP "
+                      f"subtree; every bucket must be >0 — a zero bucket = recompute "
+                      f"boundary dropped it):", flush=True)
+                for b in sorted(g_sub_sq):
+                    print(f"[v10-trainer {_stamp()}]   {b}: gnorm={g_sub_sq[b] ** 0.5:.3e}",
+                          flush=True)
         if nonfinite and step <= 2 and rank == 0:
             bad = [n for n, _ in params_named
                    if master[n].grad is not None
@@ -625,6 +713,10 @@ def main():
                 extra = f" kl={getattr(model, '_last_kl', None)} " \
                         f"agree={getattr(model, '_last_agree', None)} " \
                         f"margin={getattr(model, '_last_margin', None)}"
+            if os.environ.get("GLM53_V10_DEPTH_DIAG", "1") == "1":
+                da = getattr(model, "_last_depth_accept", None)
+                if da:
+                    extra += " dacc=" + "/".join(f"{a:.3f}" for a in da)
             batch_s = batcher_state["last"]["input_ids"].shape[1]
             print(f"[v10-trainer {_stamp()}] step {step}/{args.max_steps} "
                   f"loss={loss_val:.4f} ({dt:.1f}s, {args.batch_size * batch_s / dt:.0f} tok/s) "

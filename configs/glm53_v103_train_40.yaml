@@ -1,0 +1,22 @@
+### V10.3 Arm on .40 (A3-syn-30, container l00840580-v11 / mtpv8-shm) — from-scratch
+### base = GLM-5.3-Flash-BF16 staged on LOCAL /tmp (NFS random-read fill was
+### ~20+ min stuck; local NVMe fill = V11-proven path). Source of truth:
+### /mnt/share_space/l00840580/mtp_git/GLM-5.3-Flash-BF16 (120 shards, MTP =
+### layers.45, raw model.language_model.* naming — v10_fill contract).
+### PRECONDITION: cp -a <NFS BF16>/. /tmp/v103_base_bf16/ (see launcher).
+### LF data keys only (v10_data.load_lf_data reads dataset/dataset_dir/template/
+### cutoff_len + model_name_or_path for the tokenizer; training weights come
+### from --vendor (V10_VENDOR_DIR env, launcher-pinned to the staged local copy).
+### Recipe env = V10.3 (deploy/launch_v103_train_40.sh) VERBATIM —
+### single-variable vs the V10.2 line: KL full-vocab / freeze surface / LR /
+### clip / warmup.
+model_name_or_path: /tmp/v103_base_bf16
+trust_remote_code: true
+
+dataset: cmb_eagle_30k
+### data lives on the shared NFS (outside this repo, .gitignore excludes
+### corpora); dataset_info.json registers cmb_eagle_30k in that same dir
+dataset_dir: /mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/data/lf_data
+template: glm5_next_text
+cutoff_len: 1024
+preprocessing_num_workers: 8

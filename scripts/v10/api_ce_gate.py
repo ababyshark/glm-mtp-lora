@@ -1,30 +1,19 @@
 #!/usr/bin/env python3
-"""V10 T1 semantic CE gate via the vllm teacher API (prompt_logprobs).
+"""DEPRECATED (2026-11-23) — disabled. Use scripts/v10/ce_gate.py instead.
 
-Gate: mean next-token CE on 16 real cmb_eagle_30k texts ~2-4 (<< ln V=11.95).
-Log: v10_distill/ce_gate.log
+History: the v10_distill/ce_gate.log fake green (2026-11-19, "mean CE =
+0.0000 -> gate: PASS" with tokens=0 on every line) was produced by an
+UNCOMMITTED variant of this HTTP-API gate whose per-token exception was
+swallowed downstream, zeroing every sample. The committed code does not
+reproduce that exact defect (no undefined-name at any tracked revision —
+the forensic line attribution was unverifiable), so the whole HTTP path is
+retired rather than trusted: main() hard-exits instead of gate-verdicting.
+The live gate is ce_gate.py (offline vLLM prompt_logprobs, verified on .40
+with real CE 5.4462/4.9808). extract_prompt_ce is kept ONLY as the tested
+parsing reference (test_v10_units.py) — importing this module is silent;
+executing it is fatal.
 """
-import argparse
-import json
-import math
-import time
-import urllib.request
-
-PREFIX = "[gMASK]<sop><|system|>Reasoning Effort: Max"
-DATA = "/mnt/share_space/l00840580/mtp_git/lf_glm53_qlora_mtp/data/lf_data/cmb_eagle_30k.jsonl"
-
-
-def post(url, payload, tries=3):
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json"})
-    for t in range(tries):
-        try:
-            with urllib.request.urlopen(req, timeout=600) as r:
-                return json.loads(r.read())
-        except Exception:
-            if t == tries - 1:
-                raise
-            time.sleep(10)
+import sys
 
 
 def extract_prompt_ce(plp, ids):
@@ -56,43 +45,11 @@ def extract_prompt_ce(plp, ids):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="http://127.0.0.1:8400/v1")
-    ap.add_argument("--model", default="glm53-flash-teacher")
-    ap.add_argument("--tokenizer", default="/mnt/weight2/GLM-5.3-Flash")
-    ap.add_argument("--n", type=int, default=16)
-    ap.add_argument("--log", default="/mnt/share_space/l00840580/mtp_git/v10_distill/ce_gate.log")
-    args = ap.parse_args()
-
-    from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
-    seqs = []
-    with open(DATA) as f:
-        for i, line in enumerate(f):
-            if i >= args.n:
-                break
-            conv = json.loads(line)["conversations"]
-            human = next((t["value"] for t in conv if t["from"] == "human"), "")
-            ids = tok(PREFIX + "<|user|>" + human + "<|assistant|><think>",
-                      add_special_tokens=False)["input_ids"][:2048]
-            seqs.append((i, ids))
-
-    lines, ces = [], []
-    for i, ids in seqs:
-        r = post(args.server.rstrip("/") + "/completions", {
-            "model": args.model, "prompt": ids, "max_tokens": 1,
-            "prompt_logprobs": 0, "temperature": 0.0})
-        plp = r["choices"][0]["prompt_logprobs"]
-        ce = extract_prompt_ce(plp, ids)
-        ces.append(ce)
-        lines.append(f"sample idx={i} len={len(ids)} CE={ce:.4f}")
-        print(lines[-1], flush=True)
-    mean = sum(ces) / len(ces)
-    verdict = "PASS" if mean <= 4.5 else "FAIL"
-    with open(args.log, "w") as f:
-        f.write("\n".join(lines) + f"\n\nmean CE = {mean:.4f}\n"
-                f"ln(vocab 154880) = {math.log(154880):.4f}\ngate: {verdict}\n")
-    print(f"MEAN CE = {mean:.4f} -> {verdict}", flush=True)
+    sys.stderr.write(
+        "[FATAL] api_ce_gate.py is deprecated and DISABLED (fake-PASS "
+        "incident 2026-11-19, see v10_distill/ce_gate.log). "
+        "Use scripts/v10/ce_gate.py for the live CE gate.\n")
+    sys.exit(2)
 
 
 if __name__ == "__main__":
