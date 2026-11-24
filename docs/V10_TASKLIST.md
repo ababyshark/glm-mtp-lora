@@ -172,3 +172,49 @@ Flash bf16 TP16 每卡 = 61.25G — 几乎刚好 = 61.27G 上限 — 没有激�
 2. **V6.1 线**：工作树有未提交的 V6.1 改动（modeling_glm53_w4a8_pipe_mtp.py + test_v61_contract_kl.py）——**不混入 V10 commit**
 3. **V8 线**：已冻结（45d2115），代码/测试/铁律保留供未来复用
 4. **.38 卡**：空闲可用
+
+---
+
+## 五、V10.3 → On-policy 转段 TODO(2026-11-24 用户裁决)
+
+**裁决**:当前 Arm A(off-policy,cmb_eagle_30k)保留跑完 100 步 → 382 评测 →
+过门后启动 **on-policy 蒸馏 + 基于 on-policy 数据的新训练(B1)**。
+假设:**数据侧 on-policy(前缀轨迹 = 主模型自己的)效果会更好**。
+
+### 5.1 分析定论(为什么换 on-policy)
+
+| 层 | Arm A(off-policy,当前) | Arm B(on-policy) |
+|---|---|---|
+| 数据层:语料"下一个词"谁写 | R1 蒸馏文风 + 人类文本(外部静态语料,cmb_eagle_30k) | **Flash 主模型自己 greedy rollout** |
+| 目标层:草稿损失拟合谁 | main(已 on-policy 化:KL(main‖draft) 全词表 0.8 + agree-CE 0.2,DRAFT_W=0) | 同左 |
+| serving 层:谁写草稿 | MTP 模块 | MTP 模块 |
+| 残余缺口 | **前缀 x≤t 是语料轨迹,不是 main 的**(暴露偏差留在输入侧,目标侧修不掉) | 无(与 serving 轨道同源) |
+
+实锤:cmb_eagle_30k 样本 assistant 以 "Okay, let's try to figure out..." 开头
+(R1 思考文风);dacc 归因显示 R1 文风样本正是低接受率重灾区(step 16/18/21/24 zh)。
+目标侧修正(V10.2/V10.3 的 KL/agree)已被 382 bench 证明不够(V10.1 K̄ 3.52→2.34)。
+
+### 5.2 转段任务表
+
+| # | 任务 | 依赖 | 产出 | 验证 |
+|---|---|---|---|---|
+| T1 | Arm A 跑完 100 步 → CP100 | 训练中(.40,~04:10) | /tmp/v103_saves/cp100 | R8 分桶/EVAL-FIXED 趋势 |
+| T2 | CP100 导出 serve dir | T1 | symlink farm + delta 台账 | 冻结键跳过台账核对 |
+| T3 | **382 bench 终审(发令枪)** | T2 | K̄ | ≥2.34 及格 / 3.15-3.28 目标 |
+| T4 | 发令枪判定 → 若过门,启动 on-policy 蒸馏 | T3 | rollout 放 **.38**(16 卡空,不占 .40) | 语义 CE 门先过(垃圾生成器不 rollout) |
+| T5 | rollout:30000 prompts(onpolicy_prompts.jsonl 已备),greedy,CUTOFF 4096 | T4 | 分片 jsonl(DP2×TP8,断点续跑) | 抽样人工核查文风=Flash |
+| T6 | pack:flash_onpolicy_<domain>.jsonl + merged all.jsonl | T5 | LF 无感替换数据源 | 域分布计数 |
+| T7 | **B1 训练**:.40,配方=V10.3 逐字不变,**只换数据**(单变量) | T6 | CP + 382 bench | 与 T3 同口径对照 |
+| T8 | 判决:on-policy vs off-policy 同 prompt 域内对照 | T3+T7 | per-domain 接受率 diff | 唯一变量=response 分布 |
+
+### 5.3 工程优化点随 B1 一并落地
+
+Sequence Packing(+block-diagonal causal mask)或 grad_accum=8;cutoff 2048
+对齐 serving 长 `<think>` 链(显存余 ~10G,先 OOM 探针)。详见
+`docs/V10.3_TRAIN40_OPTIMIZATIONS.md`。
+
+### 5.4 纪律
+
+- B1 单独回答"on-policy 数据是否有效";B2(软标签)不混入。
+- rollout 产物 = Flash 自生成,**禁混外部语料**;同 prompt 域内对照保单变量。
+- Arm A 的 off-policy 基线数字(T3)必须先落档,B1 才有对照锚。
