@@ -205,7 +205,12 @@ Flash bf16 TP16 每卡 = 61.25G — 几乎刚好 = 61.27G 上限 — 没有激�
 | T5 | rollout:30000 prompts(onpolicy_prompts.jsonl 已备),greedy,CUTOFF 4096 | T4 | 分片 jsonl(DP2×TP8,断点续跑) | 抽样人工核查文风=Flash |
 | T6 | pack:flash_onpolicy_<domain>.jsonl + merged all.jsonl | T5 | LF 无感替换数据源 | 域分布计数 |
 | T7 | **B1 训练**:.40,配方=V10.3 逐字不变,**只换数据**(单变量) | T6 | CP + 382 bench | 与 T3 同口径对照 |
+| T7b | **B1b 消融**:`--lr 0` 冻结主模型(LoRA 组 LR=0,纯草稿蒸馏;on-policy 下 main_ce 退化为自我锐化,锚静止=draft 匹配的即 serving 那个 main) | T7 | B1b CP + 382 bench | B1b vs B1:K̄ + EVAL-FIXED agree 爬速(锚静止,预判 B1b 收敛更快);若优,后续 on-policy 轮默认冻结主模型只训草稿 |
 | T8 | 判决:on-policy vs off-policy 同 prompt 域内对照 | T3+T7 | per-domain 接受率 diff | 唯一变量=response 分布 |
+
+T7b 工程注记:LR 分组 LoRA 组 lr=args.lr(v10_trainer.py:366),置 0 即冻结;GRAD AUDIT
+`lora-grads=0` 属预期(打印不强制),R8 分桶只看 mtp 不受影响;export 时 LoRA 增量为零、
+serve main = 纯 vendor base,CP 台账记录。
 
 ### 5.3 工程优化点随 B1 一并落地
 
