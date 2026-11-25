@@ -63,8 +63,8 @@ for k in 2..5:
 
 - **逐深度 detach**(v1):教"处理自己的输出分布"(流形教学),不做 BPTT——
   BPTT(深度 5 的梯度穿过 1-4)列为升级项,仅在 detach 版平台时启用
-- 深度权重 `GLM53_V11_DEPTH_W`,默认 `1,0.75,0.5,0.35,0.25`(D2 最重——
-  serving 崩得最深;D1 块权重独立不受影响)
+- 深度权重 `GLM53_V11_DEPTH_W`,默认 `1,0.75,0.5,0.35`(对应深度 2-5 共 4 项;
+  D2 最重——serving 崩得最深;D1 块的监督是 KL/agree,不在本 env 内)
 - position parity:训练链用 batch position_ids(arange),与 native 路径一致;
   **pre-flight 必须与 vLLM draft loop 的位置/roll 约定逐项对拍**
 
